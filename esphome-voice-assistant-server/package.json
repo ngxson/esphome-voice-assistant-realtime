@@ -1,0 +1,20 @@
+{
+  "name": "esphome-voice-assistant-server",
+  "version": "1.0.0",
+  "description": "Bridges ESPHome voice assistant devices to OpenAI Realtime API",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node --esm src/index.ts"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.13",
+    "typescript": "^5.7.0"
+  }
+}

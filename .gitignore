@@ -1,0 +1,7 @@
+tmp
+.esphome
+node_modules
+dist
+build
+*.log
+*.tmp

@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Voice Assistant Test</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, sans-serif;
+      background: #0f0f0f;
+      color: #e8e8e8;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      gap: 28px;
+    }
+
+    h1 { font-size: 1.1rem; font-weight: 500; color: #888; letter-spacing: 0.05em; }
+
+    #btn {
+      width: 120px;
+      height: 120px;
+      border-radius: 50%;
+      border: none;
+      cursor: pointer;
+      font-size: 2.6rem;
+      background: #1e1e1e;
+      color: #e8e8e8;
+      box-shadow: 0 0 0 3px #333;
+      transition: background 0.2s, box-shadow 0.2s, transform 0.1s;
+      outline: none;
+    }
+    #btn:hover { background: #2a2a2a; }
+    #btn:active { transform: scale(0.95); }
+    #btn.active {
+      background: #c0392b;
+      box-shadow: 0 0 0 3px #e74c3c, 0 0 24px 4px rgba(231,76,60,0.35);
+    }
+    #btn.active:hover { background: #a93226; }
+
+    #status {
+      font-size: 0.9rem;
+      color: #666;
+      min-height: 1.2em;
+      text-align: center;
+      transition: color 0.2s;
+    }
+    #status.ok  { color: #2ecc71; }
+    #status.err { color: #e74c3c; }
+    #status.bot { color: #3498db; }
+
+    #log {
+      width: min(480px, 90vw);
+      height: 180px;
+      overflow-y: auto;
+      background: #181818;
+      border: 1px solid #2a2a2a;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-family: monospace;
+      font-size: 0.78rem;
+      color: #666;
+      scroll-behavior: smooth;
+    }
+    #log p { margin: 2px 0; line-height: 1.5; }
+    #log p.in  { color: #2ecc71; }
+    #log p.out { color: #3498db; }
+    #log p.err { color: #e74c3c; }
+
+    label { font-size: 0.8rem; color: #555; }
+    input[type=text] {
+      width: min(480px, 90vw);
+      padding: 8px 12px;
+      background: #181818;
+      border: 1px solid #2a2a2a;
+      border-radius: 6px;
+      color: #e8e8e8;
+      font-size: 0.85rem;
+      outline: none;
+    }
+    input[type=text]:focus { border-color: #444; }
+  </style>
+</head>
+<body>
+  <h1>VOICE ASSISTANT TEST</h1>
+
+  <div style="display:flex;flex-direction:column;gap:6px;width:min(480px,90vw)">
+    <label for="serverUrl">Server URL</label>
+    <input type="text" id="serverUrl" value="ws://localhost:8080" spellcheck="false">
+  </div>
+
+  <button id="btn" title="Start / stop session">🎤</button>
+  <div id="status">Idle</div>
+
+  <div id="log"></div>
+
+  <script>
+    const SAMPLE_RATE = 24000;
+
+    const btn       = document.getElementById('btn');
+    const statusEl  = document.getElementById('status');
+    const logEl     = document.getElementById('log');
+    const urlInput  = document.getElementById('serverUrl');
+
+    const LS_KEY = 'va_test_serverUrl';
+    urlInput.value = localStorage.getItem(LS_KEY) ?? urlInput.value;
+    urlInput.addEventListener('change', () => localStorage.setItem(LS_KEY, urlInput.value.trim()));
+
+    let ws            = null;
+    let audioCtx      = null;
+    let mediaStream   = null;
+    let processor     = null;
+    let nextPlayTime  = 0;
+    let running       = false;
+
+    function log(text, cls = '') {
+      const p = document.createElement('p');
+      if (cls) p.className = cls;
+      p.textContent = `${new Date().toLocaleTimeString()} ${text}`;
+      logEl.appendChild(p);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function setStatus(text, cls = '') {
+      statusEl.textContent = text;
+      statusEl.className = cls;
+    }
+
+    // ── PCM helpers ─────────────────────────────────────────────────────────
+
+    function float32ToPcm16(f32) {
+      const buf = new ArrayBuffer(f32.length * 2);
+      const view = new DataView(buf);
+      for (let i = 0; i < f32.length; i++) {
+        const s = Math.max(-1, Math.min(1, f32[i]));
+        view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+      }
+      return buf;
+    }
+
+    function pcm16ToFloat32(arrayBuffer) {
+      const i16 = new Int16Array(arrayBuffer);
+      const f32 = new Float32Array(i16.length);
+      for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768;
+      return f32;
+    }
+
+    // ── Playback ─────────────────────────────────────────────────────────────
+
+    function scheduleAudio(arrayBuffer) {
+      if (!audioCtx) return;
+      const f32 = pcm16ToFloat32(arrayBuffer);
+      const audioBuf = audioCtx.createBuffer(1, f32.length, SAMPLE_RATE);
+      audioBuf.copyToChannel(f32, 0);
+
+      const src = audioCtx.createBufferSource();
+      src.buffer = audioBuf;
+      src.connect(audioCtx.destination);
+
+      const now = audioCtx.currentTime;
+      if (nextPlayTime < now) nextPlayTime = now + 0.05; // small buffer guard
+      src.start(nextPlayTime);
+      nextPlayTime += audioBuf.duration;
+    }
+
+    // ── Session lifecycle ────────────────────────────────────────────────────
+
+    async function startSession() {
+      running = true;
+      btn.classList.add('active');
+      btn.textContent = '⏹';
+      urlInput.disabled = true;
+      setStatus('Connecting…');
+
+      const url = urlInput.value.trim();
+
+      try {
+        ws = new WebSocket(url);
+        ws.binaryType = 'arraybuffer';
+      } catch (e) {
+        log(`Bad URL: ${e.message}`, 'err');
+        stopSession();
+        return;
+      }
+
+      ws.onopen = async () => {
+        log(`Connected to ${url}`, 'in');
+        setStatus('Setting up microphone…');
+        try {
+          await startMicrophone();
+          setStatus('Listening', 'ok');
+          log('Microphone active — speak now');
+        } catch (e) {
+          log(`Mic error: ${e.message}`, 'err');
+          setStatus('Microphone error', 'err');
+          stopSession();
+        }
+      };
+
+      ws.onmessage = (ev) => {
+        if (ev.data instanceof ArrayBuffer && ev.data.byteLength > 0) {
+          setStatus('Bot speaking…', 'bot');
+          scheduleAudio(ev.data);
+        }
+      };
+
+      ws.onclose = (ev) => {
+        log(`Connection closed (code ${ev.code})`);
+        stopSession();
+      };
+
+      ws.onerror = () => {
+        log('WebSocket error', 'err');
+        setStatus('Connection error', 'err');
+        stopSession();
+      };
+    }
+
+    async function startMicrophone() {
+      mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+
+      // Use 24 kHz to match server expectation; modern browsers honour this
+      audioCtx = new AudioContext({ sampleRate: SAMPLE_RATE });
+      nextPlayTime = 0;
+
+      const source = audioCtx.createMediaStreamSource(mediaStream);
+
+      // ScriptProcessorNode is deprecated but universally supported and sufficient here
+      processor = audioCtx.createScriptProcessor(4096, 1, 1);
+      processor.onaudioprocess = (ev) => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        const pcm = float32ToPcm16(ev.inputBuffer.getChannelData(0));
+        ws.send(pcm);
+      };
+
+      source.connect(processor);
+      // Connect to destination so the ScriptProcessorNode stays alive (browser quirk)
+      processor.connect(audioCtx.destination);
+    }
+
+    function stopSession() {
+      running = false;
+      btn.classList.remove('active');
+      btn.textContent = '🎤';
+      urlInput.disabled = false;
+
+      if (processor) { processor.disconnect(); processor = null; }
+      if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+      if (audioCtx)   { audioCtx.close(); audioCtx = null; }
+      if (ws && ws.readyState === WebSocket.OPEN) { ws.close(); }
+      ws = null;
+
+      if (statusEl.className !== 'err') setStatus('Idle');
+    }
+
+    btn.addEventListener('click', () => {
+      if (running) stopSession();
+      else startSession();
+    });
+  </script>
+</body>
+</html>
