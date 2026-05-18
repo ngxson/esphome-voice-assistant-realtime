@@ -105,7 +105,7 @@ class VoiceAssistantWebSocket : public Component {
   std::vector<int16_t> mono_buffer_;  // For stereo to mono conversion (input)
   std::vector<int16_t> resampled_buffer_;  // For 16kHz -> 24kHz resampling (1.5x upsampling)
   // PSRAM-backed SPSC ring buffer for speaker audio (written by WebSocket task, drained by main loop)
-  static const size_t AUDIO_RING_CAPACITY = 65536;
+  static const size_t AUDIO_RING_CAPACITY = 524288;  // 512KB — holds ~10s at 24kHz mono
   uint8_t *audio_ring_buf_{nullptr};
   volatile size_t ring_head_{0};   // Written by WebSocket task
   volatile size_t ring_tail_{0};   // Written by main loop

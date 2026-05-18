@@ -11,7 +11,7 @@ export type ToolCallHandler = (name: string, args: Record<string, unknown>) => P
 const DISCONNECT_TOOL: OpenAITool = {
   type: 'function',
   name: 'disconnect_client',
-  description: 'Disconnect the client when the conversation is complete or the user requests to stop.',
+  description: 'Disconnect the client when the conversation is complete or the user requests to stop. Do not stay silent doing nothing for too long.',
   parameters: {
     type: 'object',
     properties: {
@@ -43,6 +43,8 @@ export class OpenAIRealtimeClient {
   private inputRecorder: WavRecorder | null = null;
   private outputRecorder: WavRecorder | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  private pendingDisconnect = false;
+  private drainTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     config: Config,
@@ -116,7 +118,7 @@ export class OpenAIRealtimeClient {
       session: {
         type: 'realtime',
         output_modalities: ['audio'],
-        instructions: this.config.instructions,
+        instructions: this.config.instructions + '\nWhen you have finished what the user asked, call disconnect_client to end the conversation.',
         audio: {
           input: {
             transcription: { model: 'whisper-1' },
@@ -155,6 +157,7 @@ export class OpenAIRealtimeClient {
         const audio = Buffer.from(event.delta as string, 'base64');
         this.outputRecorder?.write(audio);
         this.onAudio(this.applyGain(audio));
+        if (this.pendingDisconnect) this.scheduleDrain();
         break;
       }
 
@@ -222,7 +225,8 @@ export class OpenAIRealtimeClient {
         type: 'conversation.item.create',
         item: { type: 'function_call_output', call_id: callId, output: 'Disconnected.' },
       });
-      this.onDisconnect();
+      this.pendingDisconnect = true;
+      this.scheduleDrain();
       return;
     }
 
@@ -305,6 +309,14 @@ export class OpenAIRealtimeClient {
     }, ms);
   }
 
+  private scheduleDrain(): void {
+    if (this.drainTimer) clearTimeout(this.drainTimer);
+    this.drainTimer = setTimeout(() => {
+      console.log('[OpenAI] Audio drained — disconnecting');
+      this.onDisconnect();
+    }, 500);
+  }
+
   private applyGain(pcm: Buffer): Buffer {
     const gain = this.config.output_gain;
     if (gain === 1.0) return pcm;
@@ -327,6 +339,7 @@ export class OpenAIRealtimeClient {
 
   close(): void {
     if (this.idleTimer) clearTimeout(this.idleTimer);
+    if (this.drainTimer) clearTimeout(this.drainTimer);
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.close();
     this.ws = null;
   }
