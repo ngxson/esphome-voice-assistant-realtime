@@ -154,7 +154,7 @@ export class OpenAIRealtimeClient {
       case 'response.output_audio.delta': {
         const audio = Buffer.from(event.delta as string, 'base64');
         this.outputRecorder?.write(audio);
-        this.onAudio(audio);
+        this.onAudio(this.applyGain(audio));
         break;
       }
 
@@ -303,6 +303,17 @@ export class OpenAIRealtimeClient {
       console.log('[OpenAI] Idle timeout — closing session');
       this.onDisconnect();
     }, ms);
+  }
+
+  private applyGain(pcm: Buffer): Buffer {
+    const gain = this.config.output_gain;
+    if (gain === 1.0) return pcm;
+    const out = Buffer.allocUnsafe(pcm.length);
+    for (let i = 0; i < pcm.length - 1; i += 2) {
+      const sample = Math.max(-32768, Math.min(32767, Math.round(pcm.readInt16LE(i) * gain)));
+      out.writeInt16LE(sample, i);
+    }
+    return out;
   }
 
   interrupt(): void {

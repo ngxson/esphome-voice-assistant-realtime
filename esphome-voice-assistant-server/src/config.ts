@@ -15,6 +15,7 @@ export interface Config {
   longlived_token: string;
   enable_recording: boolean;
   idle_timeout_seconds: number;
+  output_gain: number;
 }
 
 const DEFAULTS: Config = {
@@ -32,6 +33,7 @@ const DEFAULTS: Config = {
   longlived_token: '',
   enable_recording: false,
   idle_timeout_seconds: 3,
+  output_gain: 1.0,
 };
 
 export function loadConfig(): Config {
@@ -59,5 +61,6 @@ export function loadConfig(): Config {
     longlived_token: process.env.HA_TOKEN ?? DEFAULTS.longlived_token,
     enable_recording: (process.env.ENABLE_RECORDING ?? 'false') === 'true',
     idle_timeout_seconds: parseInt(process.env.IDLE_TIMEOUT_SECONDS ?? String(DEFAULTS.idle_timeout_seconds), 10),
+    output_gain: parseFloat(process.env.OUTPUT_GAIN ?? String(DEFAULTS.output_gain)),
   };
 }

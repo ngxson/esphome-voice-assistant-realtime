@@ -1,6 +1,6 @@
 name: "ESPHome Voice Assistant Realtime Server"
 description: "Bridges ESPHome voice assistant devices to OpenAI Realtime API with optional Home Assistant tool integration."
-version: "1.0.14"
+version: "1.0.15"
 slug: "esphome_voice_assistant_server"
 url: "https://github.com/ngxson/esphome-voice-assistant-realtime"
 init: false
@@ -41,6 +41,7 @@ options:
   longlived_token: ""
   enable_recording: false
   idle_timeout_seconds: 3
+  output_gain: 1.0
 
 schema:
   openai_api_key: str
@@ -57,3 +58,4 @@ schema:
   longlived_token: str
   enable_recording: bool
   idle_timeout_seconds: int
+  output_gain: float
