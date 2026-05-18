@@ -24,7 +24,7 @@ docker run --rm \
   -e MODEL="${MODEL:-gpt-realtime-mini}" \
   -e VOICE="${VOICE:-sage}" \
   -e INSTRUCTIONS="${INSTRUCTIONS:-You are a helpful home assistant voice assistant. Be concise in your responses.}" \
-  -e SESSION_REUSE_TIMEOUT_SECONDS="${SESSION_REUSE_TIMEOUT_SECONDS:-300}" \
+  -e SESSION_REUSE_TIMEOUT_SECONDS="${SESSION_REUSE_TIMEOUT_SECONDS:-5}" \
   -e IDLE_TIMEOUT_SECONDS="${IDLE_TIMEOUT_SECONDS:-3}" \
   -e OUTPUT_GAIN="${OUTPUT_GAIN:-1.0}" \
   -e ENABLE_HA_TOOLS="${ENABLE_HA_TOOLS:-false}" \

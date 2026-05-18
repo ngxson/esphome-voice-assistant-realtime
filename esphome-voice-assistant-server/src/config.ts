@@ -27,7 +27,7 @@ const DEFAULTS: Config = {
   vad_prefix_padding_ms: 300,
   vad_silence_duration_ms: 500,
   instructions: 'You are a helpful home assistant voice assistant. Be concise in your responses.',
-  session_reuse_timeout_seconds: 300,
+  session_reuse_timeout_seconds: 5,
   enable_ha_tools: false,
   ha_mcp_url: '',
   longlived_token: '',

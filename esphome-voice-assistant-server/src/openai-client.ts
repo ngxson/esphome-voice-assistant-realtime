@@ -45,7 +45,6 @@ export class OpenAIRealtimeClient {
   private inputRecorder: WavRecorder | null = null;
   private outputRecorder: WavRecorder | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
-  private hasUserSpoken = false;
   private pendingDisconnect = false;
   private drainTimer: ReturnType<typeof setTimeout> | null = null;
   private drainAudioBytes = 0;
@@ -152,13 +151,13 @@ export class OpenAIRealtimeClient {
         if (!this.sessionReady) {
           this.sessionReady = true;
           this.restoreContext();
+          this.resetIdleTimer();
           onReady();
         }
         break;
       }
 
       case 'input_audio_buffer.speech_started': {
-        this.hasUserSpoken = true;
         this.resetIdleTimer();
         break;
       }
@@ -169,7 +168,12 @@ export class OpenAIRealtimeClient {
         this.onAudio(this.applyGain(audio));
         this.isSpeaking = true;
         this.responseAudioBytes += audio.length;
-        this.resetIdleTimer();
+        // Pause idle timer while assistant is speaking — don't restart it here,
+        // as the last-chunk timer would fire before playback ends on the device.
+        if (this.idleTimer) {
+          clearTimeout(this.idleTimer);
+          this.idleTimer = null;
+        }
         if (this.pendingDisconnect) this.drainAudioBytes += audio.length;
         break;
       }
@@ -180,13 +184,14 @@ export class OpenAIRealtimeClient {
         this.responseAudioBytes = 0;
         if (this.pendingDisconnect) this.scheduleDrain();
         if (playbackMs > 0) {
-          // Unmute mic and start idle timer only after ESP32 ring buffer fully drains
+          // Restart idle timer only after device finishes playing audio
           setTimeout(() => {
             this.isSpeaking = false;
             this.resetIdleTimer();
           }, Math.round(playbackMs) + 200);
         } else {
           this.isSpeaking = false;
+          // Zero-byte response (e.g. during init) — don't start idle timer
         }
         break;
       }
@@ -342,7 +347,6 @@ export class OpenAIRealtimeClient {
   }
 
   private resetIdleTimer(): void {
-    if (!this.hasUserSpoken) return;
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = setTimeout(() => {
       console.log('[OpenAI] Idle timeout — closing session');
