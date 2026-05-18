@@ -1,5 +1,4 @@
-import OpenAI from 'openai';
-import { OpenAIRealtimeWS } from 'openai/beta/realtime/ws';
+import WebSocket from 'ws';
 import { Config } from './config.js';
 import { ConversationItem } from './session-manager.js';
 import { OpenAITool } from './mcp-client.js';
@@ -27,7 +26,7 @@ const DISCONNECT_TOOL: OpenAITool = {
 };
 
 export class OpenAIRealtimeClient {
-  private rt: OpenAIRealtimeWS | null = null;
+  private ws: WebSocket | null = null;
   private config: Config;
   private tools: OpenAITool[];
   private onAudio: AudioOutputCallback;
@@ -65,95 +64,52 @@ export class OpenAIRealtimeClient {
   }
 
   connect(): Promise<void> {
-    const client = new OpenAI({ apiKey: this.config.openai_api_key });
+    const url = `wss://api.openai.com/v1/realtime?model=${this.config.model}`;
+    this.ws = new WebSocket(url, {
+      headers: {
+        Authorization: `Bearer ${this.config.openai_api_key}`,
+      },
+    });
 
     return new Promise((resolve, reject) => {
-      this.rt = new OpenAIRealtimeWS({ model: this.config.model }, client);
-      const rt = this.rt;
+      const onError = (err: Error) => reject(err);
+      this.ws!.once('error', onError);
 
-      rt.socket.on('open', () => {
+      this.ws!.on('open', () => {
         this.configureSession();
       });
 
-      rt.on('session.created', () => {
-        if (!this.sessionReady) {
-          this.sessionReady = true;
-          this.restoreContext();
+      this.ws!.on('message', (raw) => {
+        let event: Record<string, unknown>;
+        try {
+          event = JSON.parse(raw.toString()) as Record<string, unknown>;
+        } catch {
+          return;
+        }
+        this.handleEvent(event, () => {
+          this.ws!.removeListener('error', onError);
           resolve();
-        }
+        });
       });
 
-      rt.on('session.updated', () => {
-        if (!this.sessionReady) {
-          this.sessionReady = true;
-          this.restoreContext();
-          resolve();
-        }
-      });
-
-      rt.on('response.audio.delta', (event) => {
-        const audio = Buffer.from(event.delta, 'base64');
-        this.outputRecorder?.write(audio);
-        this.onAudio(audio);
-      });
-
-      rt.on('response.audio_transcript.done', (event) => {
-        if (event.transcript) {
-          this.conversationItems.push({ type: 'message', role: 'assistant', content: event.transcript });
-        }
-      });
-
-      rt.on('conversation.item.created', (event) => {
-        const item = event.item;
-        if (item.role === 'user' && Array.isArray(item.content)) {
-          for (const part of item.content) {
-            const text = ('text' in part ? part.text : undefined)
-              ?? ('transcript' in part ? part.transcript : undefined);
-            if (text) {
-              this.conversationItems.push({ type: 'message', role: 'user', content: text });
-              break;
-            }
-          }
-        }
-      });
-
-      // Capture the function name when the output item is first added
-      rt.on('response.output_item.added', (event) => {
-        const item = event.item;
-        if (item.type === 'function_call' && item.call_id && item.name) {
-          this.pendingCallNames.set(item.call_id, item.name);
-        }
-      });
-
-      rt.on('response.function_call_arguments.done', (event) => {
-        const name = this.pendingCallNames.get(event.call_id) ?? '';
-        this.pendingCallNames.delete(event.call_id);
-        void this.executeTool(event.call_id, name, event.arguments);
-      });
-
-      rt.on('error', (err) => {
-        console.error('[OpenAI] Error event:', err.message);
-      });
-
-      rt.socket.on('close', () => {
+      this.ws!.on('close', () => {
         this.closeRecorders();
         this.onDisconnect();
       });
 
-      rt.socket.on('error', (err: Error) => {
+      this.ws!.on('error', (err) => {
         console.error('[OpenAI] Socket error:', err.message);
-        reject(err);
       });
     });
   }
 
   private configureSession(): void {
-    this.rt!.send({
+    this.send({
       type: 'session.update',
       session: {
         modalities: ['text', 'audio'],
         instructions: this.config.instructions,
-        voice: this.config.voice as 'alloy' | 'echo' | 'shimmer' | 'ash' | 'ballad' | 'coral' | 'sage' | 'verse',
+        voice: this.config.voice,
         input_audio_format: 'pcm16',
         output_audio_format: 'pcm16',
         input_audio_transcription: { model: 'whisper-1' },
@@ -169,6 +125,76 @@ export class OpenAIRealtimeClient {
     });
   }
 
+  private handleEvent(event: Record<string, unknown>, onReady: () => void): void {
+    const type = event.type as string;
+
+    switch (type) {
+      case 'session.created':
+      case 'session.updated': {
+        if (!this.sessionReady) {
+          this.sessionReady = true;
+          this.restoreContext();
+          onReady();
+        }
+        break;
+      }
+
+      case 'response.audio.delta': {
+        const audio = Buffer.from(event.delta as string, 'base64');
+        this.outputRecorder?.write(audio);
+        this.onAudio(audio);
+        break;
+      }
+
+      // GA API renamed this; handle both names
+      case 'response.audio_transcript.done':
+      case 'response.output_audio_transcript.done': {
+        const transcript = event.transcript as string | undefined;
+        if (transcript) {
+          this.conversationItems.push({ type: 'message', role: 'assistant', content: transcript });
+        }
+        break;
+      }
+
+      case 'conversation.item.created': {
+        const item = event.item as Record<string, unknown> | undefined;
+        if (item?.role === 'user' && Array.isArray(item.content)) {
+          for (const part of item.content as Array<Record<string, unknown>>) {
+            const text = (part.text ?? part.transcript) as string | undefined;
+            if (text) {
+              this.conversationItems.push({ type: 'message', role: 'user', content: text });
+              break;
+            }
+          }
+        }
+        break;
+      }
+
+      // Capture function name before arguments start streaming
+      case 'response.output_item.added': {
+        const item = (event.item ?? {}) as Record<string, unknown>;
+        if (item.type === 'function_call' && item.call_id && item.name) {
+          this.pendingCallNames.set(item.call_id as string, item.name as string);
+        }
+        break;
+      }
+
+      case 'response.function_call_arguments.done': {
+        const callId = event.call_id as string;
+        const name = this.pendingCallNames.get(callId) ?? '';
+        this.pendingCallNames.delete(callId);
+        void this.executeTool(callId, name, event.arguments as string);
+        break;
+      }
+
+      case 'error': {
+        const err = event.error as Record<string, unknown>;
+        console.error('[OpenAI] Error event:', err?.message ?? JSON.stringify(event.error));
+        break;
+      }
+    }
+  }
+
   private async executeTool(callId: string, name: string, argsJson: string): Promise<void> {
     let args: Record<string, unknown> = {};
     try {
@@ -180,7 +206,7 @@ export class OpenAIRealtimeClient {
     console.log(`[OpenAI] Tool call: ${name}(${argsJson})`);
 
     if (name === 'disconnect_client') {
-      this.rt?.send({
+      this.send({
         type: 'conversation.item.create',
         item: { type: 'function_call_output', call_id: callId, output: 'Disconnected.' },
       });
@@ -198,11 +224,11 @@ export class OpenAIRealtimeClient {
     this.conversationItems.push({ type: 'function_call', name, call_id: callId, arguments: argsJson });
     this.conversationItems.push({ type: 'function_call_output', call_id: callId, output });
 
-    this.rt?.send({
+    this.send({
       type: 'conversation.item.create',
       item: { type: 'function_call_output', call_id: callId, output },
     });
-    this.rt?.send({ type: 'response.create' });
+    this.send({ type: 'response.create' });
   }
 
   private restoreContext(): void {
@@ -210,11 +236,11 @@ export class OpenAIRealtimeClient {
 
     for (const item of this.conversationItems) {
       if (item.type !== 'message') continue;
-      this.rt!.send({
+      this.send({
         type: 'conversation.item.create',
         item: {
           type: 'message',
-          role: item.role as 'user' | 'assistant',
+          role: item.role,
           content: [
             item.role === 'user'
               ? { type: 'input_text', text: item.content ?? '' }
@@ -227,14 +253,14 @@ export class OpenAIRealtimeClient {
   }
 
   sendAudio(pcm: Buffer): void {
-    if (!this.sessionReady || !this.rt) return;
+    if (!this.sessionReady || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this.inputRecorder?.write(pcm);
-    this.rt.send({ type: 'input_audio_buffer.append', audio: pcm.toString('base64') });
+    this.send({ type: 'input_audio_buffer.append', audio: pcm.toString('base64') });
   }
 
   interrupt(): void {
-    this.rt?.send({ type: 'response.cancel' });
-    this.rt?.send({ type: 'input_audio_buffer.clear' });
+    this.send({ type: 'response.cancel' });
+    this.send({ type: 'input_audio_buffer.clear' });
   }
 
   getConversationItems(): ConversationItem[] {
@@ -242,8 +268,8 @@ export class OpenAIRealtimeClient {
   }
 
   close(): void {
-    this.rt?.close();
-    this.rt = null;
+    if (this.ws?.readyState === WebSocket.OPEN) this.ws.close();
+    this.ws = null;
   }
 
   private closeRecorders(): void {
@@ -251,5 +277,11 @@ export class OpenAIRealtimeClient {
     this.outputRecorder?.close().catch(console.error);
     this.inputRecorder = null;
     this.outputRecorder = null;
+  }
+
+  private send(event: unknown): void {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(event));
+    }
   }
 }
