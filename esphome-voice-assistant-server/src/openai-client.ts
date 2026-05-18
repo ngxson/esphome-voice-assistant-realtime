@@ -47,6 +47,7 @@ export class OpenAIRealtimeClient {
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingDisconnect = false;
   private drainTimer: ReturnType<typeof setTimeout> | null = null;
+  private drainAudioBytes = 0;
   private isSpeaking = false;
 
   constructor(
@@ -161,12 +162,13 @@ export class OpenAIRealtimeClient {
         this.outputRecorder?.write(audio);
         this.onAudio(this.applyGain(audio));
         this.isSpeaking = true;
-        if (this.pendingDisconnect) this.scheduleDrain();
+        if (this.pendingDisconnect) this.drainAudioBytes += audio.length;
         break;
       }
 
       case 'response.output_audio.done': {
         this.isSpeaking = false;
+        if (this.pendingDisconnect) this.scheduleDrain();
         break;
       }
 
@@ -235,7 +237,7 @@ export class OpenAIRealtimeClient {
         item: { type: 'function_call_output', call_id: callId, output: 'Disconnected.' },
       });
       this.pendingDisconnect = true;
-      this.scheduleDrain();
+      this.drainAudioBytes = 0;
       return;
     }
 
@@ -321,10 +323,14 @@ export class OpenAIRealtimeClient {
 
   private scheduleDrain(): void {
     if (this.drainTimer) clearTimeout(this.drainTimer);
+    // 24kHz mono 16-bit = 48000 bytes/sec; add 500ms buffer for network + ESP32 ring buffer
+    const playbackMs = (this.drainAudioBytes / 48000) * 1000;
+    const delayMs = Math.round(playbackMs) + 500;
+    console.log(`[OpenAI] Scheduling disconnect in ${delayMs}ms (${Math.round(playbackMs)}ms audio + 500ms buffer)`);
     this.drainTimer = setTimeout(() => {
       console.log('[OpenAI] Audio drained — disconnecting');
       this.onDisconnect();
-    }, 2000);
+    }, delayMs);
   }
 
   private applyGain(pcm: Buffer): Buffer {
