@@ -280,7 +280,7 @@ export class OpenAIRealtimeClient {
           content: [
             item.role === 'user'
               ? { type: 'input_text', text: item.content ?? '' }
-              : { type: 'text', text: item.content ?? '' },
+              : { type: 'output_text', text: item.content ?? '' },
           ],
         },
       });
