@@ -18,7 +18,7 @@ WORKDIR /app
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
 
-COPY run.sh /run.sh
-RUN chmod +x /run.sh
-
-CMD ["/run.sh"]
+# Register as an s6 service so s6-overlay stays as PID 1
+RUN mkdir -p /etc/services.d/voice-assistant
+COPY run.sh /etc/services.d/voice-assistant/run
+RUN chmod +x /etc/services.d/voice-assistant/run
