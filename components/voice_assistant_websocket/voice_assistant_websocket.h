@@ -13,7 +13,6 @@
 #endif
 #include <string>
 #include <vector>
-#include <queue>
 
 namespace esphome {
 namespace voice_assistant_websocket {
@@ -88,12 +87,6 @@ class VoiceAssistantWebSocket : public Component {
   std::vector<uint8_t> input_buffer_;
   std::vector<uint8_t> output_buffer_;
   
-  // Queue for audio data when speaker buffer is full
-  // Reduced size to prevent memory exhaustion
-  std::queue<std::vector<uint8_t>> audio_queue_;
-  static const size_t MAX_QUEUE_SIZE = 10;  // Max 10 chunks (~40KB) to prevent memory overflow
-  static const size_t MIN_FREE_HEAP_BYTES = 15000;  // Minimum free heap required before queuing audio
-  
   // Timing
   uint32_t last_audio_send_{0};
   uint32_t last_audio_receive_{0};
@@ -111,7 +104,11 @@ class VoiceAssistantWebSocket : public Component {
   // Audio conversion buffers
   std::vector<int16_t> mono_buffer_;  // For stereo to mono conversion (input)
   std::vector<int16_t> resampled_buffer_;  // For 16kHz -> 24kHz resampling (1.5x upsampling)
-  std::vector<uint8_t> output_stereo_buffer_;  // For output processing (24kHz mono -> 48kHz stereo, 16-bit)
+  // PSRAM-backed SPSC ring buffer for speaker audio (written by WebSocket task, drained by main loop)
+  static const size_t AUDIO_RING_CAPACITY = 65536;
+  uint8_t *audio_ring_buf_{nullptr};
+  volatile size_t ring_head_{0};   // Written by WebSocket task
+  volatile size_t ring_tail_{0};   // Written by main loop
   
   bool pending_start_{false};
   bool pending_disconnect_{false};  // Flag to disconnect in loop() (cannot be called from websocket task)
