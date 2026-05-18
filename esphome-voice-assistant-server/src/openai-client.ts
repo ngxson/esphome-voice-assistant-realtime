@@ -35,6 +35,7 @@ export class OpenAIRealtimeClient {
 
   private conversationItems: ConversationItem[];
   private liveContext: string | null;
+  private mcpPrompt: string | null;
   private sessionReady = false;
   // call_id → function name, populated from response.output_item.added
   private pendingCallNames = new Map<string, string>();
@@ -48,6 +49,7 @@ export class OpenAIRealtimeClient {
     cachedItems: ConversationItem[],
     recordingPath: string | null,
     liveContext: string | null,
+    mcpPrompt: string | null,
     onAudio: AudioOutputCallback,
     onDisconnect: DisconnectCallback,
     onToolCall: ToolCallHandler,
@@ -56,6 +58,7 @@ export class OpenAIRealtimeClient {
     this.tools = tools;
     this.conversationItems = [...cachedItems];
     this.liveContext = liveContext;
+    this.mcpPrompt = mcpPrompt;
     this.onAudio = onAudio;
     this.onDisconnect = onDisconnect;
     this.onToolCall = onToolCall;
@@ -228,6 +231,7 @@ export class OpenAIRealtimeClient {
     } catch (err: unknown) {
       output = `Error: ${err instanceof Error ? err.message : String(err)}`;
     }
+    console.log(`[OpenAI] Tool response: ${output}`);
 
     this.conversationItems.push({ type: 'function_call', name, call_id: callId, arguments: argsJson });
     this.conversationItems.push({ type: 'function_call_output', call_id: callId, output });
@@ -240,6 +244,18 @@ export class OpenAIRealtimeClient {
   }
 
   private restoreContext(): void {
+    if (this.mcpPrompt) {
+      this.send({
+        type: 'conversation.item.create',
+        item: {
+          type: 'message',
+          role: 'system',
+          content: [{ type: 'input_text', text: this.mcpPrompt }],
+        },
+      });
+      console.log('[OpenAI] Injected HA Assist prompt');
+    }
+
     if (this.liveContext) {
       this.send({
         type: 'conversation.item.create',

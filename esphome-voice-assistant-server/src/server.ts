@@ -11,6 +11,7 @@ export class VoiceAssistantServer {
   private sessionManager: SessionManager;
   private mcpTools: OpenAITool[] = [];
   private mcpClient: MCPClient | null = null;
+  private mcpPrompt: string | null = null;
 
   constructor(config: Config) {
     this.config = config;
@@ -24,6 +25,12 @@ export class VoiceAssistantServer {
         const tools = await this.mcpClient.listTools();
         this.mcpTools = tools.map(mcpToolToOpenAI);
         console.log(`[Server] Loaded ${this.mcpTools.length} HA tools from MCP`);
+        try {
+          this.mcpPrompt = await this.mcpClient.getPrompt('Assist');
+          if (this.mcpPrompt) console.log('[Server] Loaded HA Assist prompt from MCP');
+        } catch (err: unknown) {
+          console.error('[Server] Failed to load MCP prompt:', err instanceof Error ? err.message : err);
+        }
       } catch (err: unknown) {
         console.error('[Server] Failed to load MCP tools:', err instanceof Error ? err.message : err);
       }
@@ -97,6 +104,7 @@ export class VoiceAssistantServer {
       cachedItems,
       recordingPath,
       liveContext,
+      this.mcpPrompt,
       (audio) => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(audio);

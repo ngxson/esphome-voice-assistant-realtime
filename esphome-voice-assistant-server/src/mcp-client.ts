@@ -80,6 +80,17 @@ export class MCPClient {
     return this.callTool('GetLiveContext', {});
   }
 
+  async getPrompt(name: string): Promise<string | null> {
+    const result = await this.request('prompts/get', { name }) as {
+      messages?: Array<{ role: string; content: { type: string; text?: string } }>;
+    };
+    if (!result.messages) return null;
+    return result.messages
+      .filter((m) => m.content?.type === 'text' && m.content.text)
+      .map((m) => m.content.text as string)
+      .join('\n');
+  }
+
   async callTool(name: string, args: Record<string, unknown>): Promise<string> {
     const result = await this.request('tools/call', { name, arguments: args }) as {
       content?: Array<{ type: string; text?: string }>;
