@@ -17,6 +17,7 @@ RUN apk add --no-cache nodejs
 WORKDIR /app
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
+COPY package.json ./
 
 COPY run.sh /run.sh
 RUN chmod +x /run.sh
