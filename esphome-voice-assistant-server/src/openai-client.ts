@@ -177,11 +177,15 @@ export class OpenAIRealtimeClient {
         const playbackMs = (this.responseAudioBytes / 48000) * 1000;
         this.responseAudioBytes = 0;
         if (this.pendingDisconnect) this.scheduleDrain();
-        // Unmute mic and start idle timer only after ESP32 ring buffer fully drains
-        setTimeout(() => {
+        if (playbackMs > 0) {
+          // Unmute mic and start idle timer only after ESP32 ring buffer fully drains
+          setTimeout(() => {
+            this.isSpeaking = false;
+            this.resetIdleTimer();
+          }, Math.round(playbackMs) + 200);
+        } else {
           this.isSpeaking = false;
-          this.resetIdleTimer();
-        }, Math.round(playbackMs) + 200);
+        }
         break;
       }
 
