@@ -45,6 +45,7 @@ export class OpenAIRealtimeClient {
   private inputRecorder: WavRecorder | null = null;
   private outputRecorder: WavRecorder | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  private hasUserSpoken = false;
   private pendingDisconnect = false;
   private drainTimer: ReturnType<typeof setTimeout> | null = null;
   private drainAudioBytes = 0;
@@ -157,6 +158,7 @@ export class OpenAIRealtimeClient {
       }
 
       case 'input_audio_buffer.speech_started': {
+        this.hasUserSpoken = true;
         this.resetIdleTimer();
         break;
       }
@@ -340,6 +342,7 @@ export class OpenAIRealtimeClient {
   }
 
   private resetIdleTimer(): void {
+    if (!this.hasUserSpoken) return;
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = setTimeout(() => {
       console.log('[OpenAI] Idle timeout — closing session');
