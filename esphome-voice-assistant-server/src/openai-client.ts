@@ -8,7 +8,7 @@ export type AudioOutputCallback = (audio: Buffer) => void;
 export type DisconnectCallback = () => void;
 export type ToolCallHandler = (name: string, args: Record<string, unknown>) => Promise<string>;
 
-const ENABLE_DUPLEX = true; // whether to allow assistant to listen while speaking (may cause assistant to re-listen to its own voice and get confused)
+const ENABLE_DUPLEX = false; // whether to allow assistant to listen while speaking (may cause assistant to re-listen to its own voice and get confused)
 
 const DISCONNECT_TOOL: OpenAITool = {
   type: 'function',
@@ -245,6 +245,7 @@ export class OpenAIRealtimeClient {
       });
       this.pendingDisconnect = true;
       this.drainAudioBytes = 0;
+      this.scheduleDrain();
       return;
     }
 
