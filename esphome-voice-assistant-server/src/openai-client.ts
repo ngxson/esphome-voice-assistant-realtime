@@ -162,6 +162,7 @@ export class OpenAIRealtimeClient {
         this.outputRecorder?.write(audio);
         this.onAudio(this.applyGain(audio));
         this.isSpeaking = true;
+        this.resetIdleTimer();
         if (this.pendingDisconnect) this.drainAudioBytes += audio.length;
         break;
       }
