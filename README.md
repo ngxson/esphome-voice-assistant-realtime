@@ -115,6 +115,50 @@ If you are running Home Assistant in a non-supervised setup or behind a reverse 
 
 ---
 
+## Tool Call Events (LED / Busy Indication)
+
+When the AI calls a Home Assistant tool (e.g. to control a light or run a script), the server sends JSON events to the ESP32 so you can show a visual indicator.
+
+### Server → ESP32 protocol
+
+All control messages are JSON text frames. Audio is raw binary PCM (24 kHz, 16-bit mono).
+
+| Message | When sent |
+|---------|-----------|
+| `{"type":"tool_start","name":"<tool_name>"}` | A tool call has begun (before the HA request) |
+| `{"type":"tool_done","name":"<tool_name>"}` | The tool call completed |
+| `{"type":"interrupt"}` | Server is cancelling the current response |
+| `{"type":"disconnect"}` | Server is closing the session |
+
+### ESP32 → Server protocol
+
+| Message | When sent |
+|---------|-----------|
+| Binary frame | Raw PCM audio (24 kHz, 16-bit mono, resampled from 16 kHz) |
+| `{"type":"interrupt"}` | User interrupted the assistant |
+
+### ESPHome automation triggers
+
+Use `on_tool_start` and `on_tool_done` in your ESPHome YAML. `on_tool_start` exposes the tool name as the `tool_name` variable:
+
+```yaml
+voice_assistant_websocket:
+  id: voice_assistant_ws
+  server_url: ws://192.168.1.100:8080
+  microphone: i2s_mics
+  speaker: voice_resampling_speaker
+  on_tool_start:
+    - lambda: ESP_LOGI("va", "Tool started: %s", tool_name.c_str());
+    - light.turn_on:
+        id: status_led
+        effect: pulse
+  on_tool_done:
+    - light.turn_off:
+        id: status_led
+```
+
+---
+
 ## Session Context Caching
 
 When an ESP32 disconnects and reconnects within `session_reuse_timeout_seconds`, the previous conversation transcript is restored. The AI remembers what was said and can continue the conversation naturally without starting over.

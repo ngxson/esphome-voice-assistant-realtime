@@ -21,6 +21,8 @@ CONF_ON_CONNECTED = "on_connected"
 CONF_ON_DISCONNECTED = "on_disconnected"
 CONF_ON_ERROR = "on_error"
 CONF_ON_STOPPED = "on_stopped"
+CONF_ON_TOOL_START = "on_tool_start"
+CONF_ON_TOOL_DONE = "on_tool_done"
 
 CONFIG_SCHEMA = cv.Schema(
     {
@@ -32,6 +34,11 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_ON_DISCONNECTED): automation.validate_automation(single=True),
         cv.Optional(CONF_ON_ERROR): automation.validate_automation(single=True),
         cv.Optional(CONF_ON_STOPPED): automation.validate_automation(single=True),
+        cv.Optional(CONF_ON_TOOL_START): automation.validate_automation(
+            {cv.GenerateID(automation.CONF_TRIGGER_ID): cv.declare_id(automation.Trigger.template(cg.std_string))},
+            single=True,
+        ),
+        cv.Optional(CONF_ON_TOOL_DONE): automation.validate_automation(single=True),
     }
 ).extend(cv.COMPONENT_SCHEMA)
 
@@ -81,6 +88,18 @@ async def to_code(config):
     if CONF_ON_STOPPED in config:
         await automation.build_automation(
             var.get_stopped_trigger(), [], config[CONF_ON_STOPPED]
+        )
+
+    if CONF_ON_TOOL_START in config:
+        await automation.build_automation(
+            var.get_tool_start_trigger(),
+            [(cg.std_string, "tool_name")],
+            config[CONF_ON_TOOL_START],
+        )
+
+    if CONF_ON_TOOL_DONE in config:
+        await automation.build_automation(
+            var.get_tool_done_trigger(), [], config[CONF_ON_TOOL_DONE]
         )
 
 

@@ -65,7 +65,9 @@ void VoiceAssistantWebSocket::loop() {
       esp_websocket_client_destroy(this->websocket_client_);
       this->websocket_client_ = nullptr;
     }
-    if (this->speaker_ != nullptr) this->speaker_->stop();
+    // Do NOT stop the speaker here — ring buffer reset below prevents any further
+    // data from reaching it, so it drains naturally. Calling stop() here races
+    // with the on_stopped bell announcement and leaves the media player stuck in ANNOUNCING.
     this->ring_head_ = 0;
     this->ring_tail_ = 0;
     this->input_buffer_.clear();
@@ -576,10 +578,28 @@ void VoiceAssistantWebSocket::handle_websocket_event_(esp_websocket_event_id_t e
         } else if (message.find("\"type\":\"disconnect\"") != std::string::npos ||
                    message.find("\"type\": \"disconnect\"") != std::string::npos) {
           ESP_LOGI(TAG, "Disconnect message received, stopping voice assistant and going to idle");
-          // Mark that we received an explicit disconnect to prevent reconnection
           this->explicit_disconnect_ = true;
-          // Stop the voice assistant (will go to idle mode)
           this->stop();
+        } else if (message.find("\"type\":\"tool_start\"") != std::string::npos ||
+                   message.find("\"type\": \"tool_start\"") != std::string::npos) {
+          // Extract tool name from JSON (simple string search, no full JSON parser needed)
+          std::string tool_name;
+          auto name_pos = message.find("\"name\":");
+          if (name_pos != std::string::npos) {
+            auto quote_start = message.find('"', name_pos + 7);
+            if (quote_start != std::string::npos) {
+              auto quote_end = message.find('"', quote_start + 1);
+              if (quote_end != std::string::npos) {
+                tool_name = message.substr(quote_start + 1, quote_end - quote_start - 1);
+              }
+            }
+          }
+          ESP_LOGI(TAG, "Tool call started: %s", tool_name.c_str());
+          this->tool_start_trigger_.trigger(tool_name);
+        } else if (message.find("\"type\":\"tool_done\"") != std::string::npos ||
+                   message.find("\"type\": \"tool_done\"") != std::string::npos) {
+          ESP_LOGI(TAG, "Tool call finished");
+          this->tool_done_trigger_.trigger();
         }
       }
       break;

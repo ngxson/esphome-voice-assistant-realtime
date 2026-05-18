@@ -124,6 +124,11 @@ export class VoiceAssistantServer {
         if (!this.mcpClient) throw new Error('HA MCP is not configured');
         return this.mcpClient.callTool(name, args);
       },
+      (msg) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify(msg));
+        }
+      },
     );
 
     openaiClient.connect()

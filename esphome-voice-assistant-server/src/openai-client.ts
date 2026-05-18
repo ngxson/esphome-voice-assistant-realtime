@@ -7,6 +7,7 @@ import { WavRecorder } from './audio-recorder.js';
 export type AudioOutputCallback = (audio: Buffer) => void;
 export type DisconnectCallback = () => void;
 export type ToolCallHandler = (name: string, args: Record<string, unknown>) => Promise<string>;
+export type EventCallback = (msg: Record<string, unknown>) => void;
 
 const ENABLE_DUPLEX = false; // whether to allow assistant to listen while speaking (may cause assistant to re-listen to its own voice and get confused)
 
@@ -34,6 +35,7 @@ export class OpenAIRealtimeClient {
   private onAudio: AudioOutputCallback;
   private onDisconnect: DisconnectCallback;
   private onToolCall: ToolCallHandler;
+  private onEvent: EventCallback;
 
   private conversationItems: ConversationItem[];
   private liveContext: string | null;
@@ -62,6 +64,7 @@ export class OpenAIRealtimeClient {
     onAudio: AudioOutputCallback,
     onDisconnect: DisconnectCallback,
     onToolCall: ToolCallHandler,
+    onEvent: EventCallback,
   ) {
     this.config = config;
     this.tools = tools;
@@ -71,6 +74,7 @@ export class OpenAIRealtimeClient {
     this.onAudio = onAudio;
     this.onDisconnect = onDisconnect;
     this.onToolCall = onToolCall;
+    this.onEvent = onEvent;
 
     if (recordingPath) {
       this.inputRecorder = new WavRecorder(`${recordingPath}_input.wav`);
@@ -288,6 +292,8 @@ export class OpenAIRealtimeClient {
       return;
     }
 
+    this.onEvent({ type: 'tool_start', name });
+
     let output: string;
     try {
       output = await this.onToolCall(name, args);
@@ -295,6 +301,8 @@ export class OpenAIRealtimeClient {
       output = `Error: ${err instanceof Error ? err.message : String(err)}`;
     }
     console.log(`[OpenAI] Tool response: ${output}`);
+
+    this.onEvent({ type: 'tool_done', name });
 
     this.conversationItems.push({ type: 'function_call', name, call_id: callId, arguments: argsJson });
     this.conversationItems.push({ type: 'function_call_output', call_id: callId, output });

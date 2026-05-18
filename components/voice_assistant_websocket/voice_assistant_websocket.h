@@ -54,6 +54,8 @@ class VoiceAssistantWebSocket : public Component {
   Trigger<> *get_disconnected_trigger() { return &this->disconnected_trigger_; }
   Trigger<> *get_error_trigger() { return &this->error_trigger_; }
   Trigger<> *get_stopped_trigger() { return &this->stopped_trigger_; }
+  Trigger<std::string> *get_tool_start_trigger() { return &this->tool_start_trigger_; }
+  Trigger<> *get_tool_done_trigger() { return &this->tool_done_trigger_; }
 
  protected:
   void connect_websocket_();
@@ -82,6 +84,8 @@ class VoiceAssistantWebSocket : public Component {
   Trigger<> disconnected_trigger_{};
   Trigger<> error_trigger_{};
   Trigger<> stopped_trigger_{};
+  Trigger<std::string> tool_start_trigger_{};
+  Trigger<> tool_done_trigger_{};
   
   // Audio buffers
   std::vector<uint8_t> input_buffer_;
