@@ -13,6 +13,11 @@ export class VoiceAssistantServer {
   private mcpClient: MCPClient | null = null;
   private mcpPrompt: string | null = null;
 
+  // Paired-device support: speaker-only clients waiting for their mic partner
+  private pairedSpeakers = new Map<string, WebSocket>();
+  // Callbacks registered by mic clients when their speaker hasn't connected yet
+  private pendingSpeakerCallbacks = new Map<string, (ws: WebSocket) => void>();
+
   constructor(config: Config) {
     this.config = config;
     this.sessionManager = new SessionManager(config.session_reuse_timeout_seconds);
@@ -55,9 +60,19 @@ export class VoiceAssistantServer {
     console.log(`[Server] Listening on port ${this.config.websocket_port}`);
 
     wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
-      const clientId = req.socket.remoteAddress ?? 'unknown';
-      console.log(`[Server] Client connected: ${clientId}`);
-      this.handleClient(ws, clientId);
+      const params = new URL(req.url ?? '/', 'http://localhost').searchParams;
+      const uid = params.get('uid');
+      const peerUid = params.get('peer_uid');
+      const role = params.get('role') ?? 'full';
+      const clientId = uid ?? (req.socket.remoteAddress ?? 'unknown');
+
+      console.log(`[Server] Client connected: ${clientId} role=${role}${peerUid ? ` peer=${peerUid}` : ''}`);
+
+      if (role === 'speaker' && uid) {
+        this.handleSpeakerClient(ws, uid);
+      } else {
+        void this.handleClient(ws, clientId, peerUid);
+      }
     });
 
     wss.on('error', (err) => {
@@ -65,7 +80,32 @@ export class VoiceAssistantServer {
     });
   }
 
-  private async handleClient(ws: WebSocket, clientId: string): Promise<void> {
+  private handleSpeakerClient(ws: WebSocket, uid: string): void {
+    const callback = this.pendingSpeakerCallbacks.get(uid);
+    if (callback) {
+      // Mic session already waiting — hand the WS over immediately
+      this.pendingSpeakerCallbacks.delete(uid);
+      callback(ws);
+    } else {
+      // Mic hasn't arrived yet — park the WS until it does (30 s safety timeout)
+      this.pairedSpeakers.set(uid, ws);
+      const timeout = setTimeout(() => {
+        if (this.pairedSpeakers.get(uid) === ws) {
+          console.log(`[Server] Speaker ${uid} timed out waiting for mic`);
+          this.pairedSpeakers.delete(uid);
+          ws.close();
+        }
+      }, 30000);
+      ws.on('close', () => {
+        clearTimeout(timeout);
+        this.pairedSpeakers.delete(uid);
+      });
+    }
+    ws.on('error', (err) => console.error(`[Server] Speaker error (${uid}):`, err.message));
+    ws.on('message', () => { /* speaker never sends audio */ });
+  }
+
+  private async handleClient(ws: WebSocket, clientId: string, peerUid: string | null = null): Promise<void> {
     const cachedItems = this.sessionManager.getCachedItems(clientId);
     if (cachedItems.length > 0) {
       console.log(`[Server] Restoring ${cachedItems.length} context items for ${clientId}`);
@@ -77,6 +117,21 @@ export class VoiceAssistantServer {
 
     let openaiClient: OpenAIRealtimeClient | null = null;
     let cleaned = false;
+
+    // Paired-device: lazily resolved speaker WS — populated immediately if speaker
+    // already connected, or filled in by handleSpeakerClient when it arrives later.
+    const speakerRef: { ws: WebSocket | null } = { ws: null };
+    if (peerUid) {
+      const existing = this.pairedSpeakers.get(peerUid);
+      if (existing) {
+        this.pairedSpeakers.delete(peerUid);
+        speakerRef.ws = existing;
+      } else {
+        this.pendingSpeakerCallbacks.set(peerUid, (speakerWs) => {
+          speakerRef.ws = speakerWs;
+        });
+      }
+    }
 
     let liveContext: string | null = null;
     if (this.mcpClient) {
@@ -92,6 +147,9 @@ export class VoiceAssistantServer {
       if (cleaned) return;
       cleaned = true;
 
+      // Remove pending callback if speaker never arrived
+      if (peerUid) this.pendingSpeakerCallbacks.delete(peerUid);
+
       if (openaiClient) {
         const items = openaiClient.getConversationItems();
         this.sessionManager.updateCache(clientId, items);
@@ -102,6 +160,20 @@ export class VoiceAssistantServer {
       if (ws.readyState === WebSocket.OPEN) {
         ws.close();
       }
+
+      // Tell the paired speaker to stop too
+      if (speakerRef.ws?.readyState === WebSocket.OPEN) {
+        speakerRef.ws.send(JSON.stringify({ type: 'disconnect' }));
+        const sp = speakerRef.ws;
+        setTimeout(() => { if (sp.readyState === WebSocket.OPEN) sp.close(); }, 1000);
+      }
+    };
+
+    const sendAudio = (audio: Buffer): void => {
+      const target = peerUid ? speakerRef.ws : ws;
+      if (target?.readyState === WebSocket.OPEN) {
+        target.send(audio);
+      }
     };
 
     openaiClient = new OpenAIRealtimeClient(
@@ -111,11 +183,7 @@ export class VoiceAssistantServer {
       recordingPath,
       liveContext,
       this.mcpPrompt,
-      (audio) => {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(audio);
-        }
-      },
+      sendAudio,
       () => {
         console.log(`[Server] Session ended for ${clientId}`);
         cleanup();

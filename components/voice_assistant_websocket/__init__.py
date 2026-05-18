@@ -8,7 +8,7 @@ from esphome.core import CORE
 from esphome.components.esp32 import add_idf_component
 
 CODEOWNERS = ["@openai-realtime-voice-agent"]
-DEPENDENCIES = ["microphone", "speaker"]
+DEPENDENCIES = []
 
 voice_assistant_websocket_ns = cg.esphome_ns.namespace("voice_assistant_websocket")
 VoiceAssistantWebSocket = voice_assistant_websocket_ns.class_(
@@ -23,6 +23,9 @@ CONF_ON_ERROR = "on_error"
 CONF_ON_STOPPED = "on_stopped"
 CONF_ON_TOOL_START = "on_tool_start"
 CONF_ON_TOOL_DONE = "on_tool_done"
+CONF_DEVICE_UID = "device_uid"
+CONF_PEER_UID = "peer_uid"
+CONF_UDP_WAKE_PORT = "udp_wake_port"
 
 CONFIG_SCHEMA = cv.Schema(
     {
@@ -30,6 +33,9 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Required(CONF_SERVER_URL): cv.string,
         cv.Optional(CONF_MICROPHONE): cv.use_id(microphone.Microphone),
         cv.Optional(CONF_SPEAKER): cv.use_id(speaker.Speaker),
+        cv.Optional(CONF_DEVICE_UID, default=0): cv.int_range(min=0, max=0xFFFFFFFF),
+        cv.Optional(CONF_PEER_UID, default=0): cv.int_range(min=0, max=0xFFFFFFFF),
+        cv.Optional(CONF_UDP_WAKE_PORT, default=55300): cv.port,
         cv.Optional(CONF_ON_CONNECTED): automation.validate_automation(single=True),
         cv.Optional(CONF_ON_DISCONNECTED): automation.validate_automation(single=True),
         cv.Optional(CONF_ON_ERROR): automation.validate_automation(single=True),
@@ -60,7 +66,10 @@ async def to_code(config):
         )
     
     cg.add(var.set_server_url(config[CONF_SERVER_URL]))
-    
+    cg.add(var.set_device_uid(config[CONF_DEVICE_UID]))
+    cg.add(var.set_peer_uid(config[CONF_PEER_UID]))
+    cg.add(var.set_udp_wake_port(config[CONF_UDP_WAKE_PORT]))
+
     if CONF_MICROPHONE in config:
         mic = await cg.get_variable(config[CONF_MICROPHONE])
         cg.add(var.set_microphone(mic))

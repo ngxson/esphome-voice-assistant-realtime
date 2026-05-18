@@ -1,0 +1,145 @@
+# ESPHome Configuration — Microphone-Only Voice Satellite
+#
+# Chip:    ESP32-WROOM-32 (plain ESP32, no PSRAM needed)
+# Role:    Detects wake word, sends audio to server.
+#          Audio playback handled by a paired speaker device (e.g. Voice PE / ESP32-S3).
+#
+# Wiring (INMP441 I2S microphone):
+#   INMP441 VDD  → 3.3 V
+#   INMP441 GND  → GND
+#   INMP441 L/R  → GND  (selects left channel)
+#   INMP441 WS   → GPIO25
+#   INMP441 SCK  → GPIO26
+#   INMP441 SD   → GPIO34  (input-only pin — perfect for mic data)
+#
+# Pairing:
+#   Set device_uid to a unique 32-bit integer for THIS mic device (e.g. 0xA0000001).
+#   Set peer_uid  to the device_uid of the paired SPEAKER device (e.g. 0xB0000001).
+#   The speaker config must have device_uid matching this peer_uid (and no peer_uid set).
+#   Both devices must use the same server_url and udp_wake_port.
+#
+# CONFIGURATION REQUIRED:
+#   Create secrets.yaml with:
+#     wifi_ssid, wifi_password, api_encryption_key, ota_password, server_url
+
+substitutions:
+  device_name: voice-mic
+
+esphome:
+  name: ${device_name}
+  friendly_name: Voice Microphone
+  on_boot:
+    priority: 375
+    then:
+      - wait_until:
+          condition:
+            wifi.connected:
+      - micro_wake_word.start: mww
+
+esp32:
+  board: esp32dev
+  variant: esp32
+  framework:
+    type: esp-idf
+    version: recommended
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  on_connect:
+    - micro_wake_word.start: mww
+
+logger:
+  level: DEBUG
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+i2s_audio:
+  - id: i2s_input
+    i2s_lrclk_pin: GPIO25
+    i2s_bclk_pin: GPIO26
+
+microphone:
+  - platform: i2s_audio
+    id: i2s_mic
+    i2s_audio_id: i2s_input
+    i2s_din_pin: GPIO34
+    adc_type: external
+    pdm: false
+    sample_rate: 16000
+    bits_per_sample: 32bit
+    i2s_mode: primary
+    channel: left
+
+micro_wake_word:
+  id: mww
+  microphone:
+    microphone: i2s_mic
+    channels: 1
+  stop_after_detection: false
+  models:
+    - model: hey_jarvis
+  on_wake_word_detected:
+    - if:
+        condition:
+          not:
+            voice_assistant_websocket.is_running:
+              id: voice_assistant_ws
+        then:
+          - voice_assistant_websocket.start:
+              id: voice_assistant_ws
+
+external_components:
+  - source:
+      type: git
+      url: https://github.com/ngxson/esphome-voice-assistant-realtime
+    components: [voice_assistant_websocket]
+
+voice_assistant_websocket:
+  id: voice_assistant_ws
+  server_url: !secret server_url
+  microphone: i2s_mic
+  # No speaker: this device only captures and sends audio.
+  # Playback is handled by the paired speaker device.
+
+  # Unique ID for this mic device — any 32-bit integer, written as hex for clarity.
+  # Pick any value; it just has to differ from the speaker's device_uid.
+  device_uid: 0xA0000001
+  # UID of the paired speaker device — must match that device's device_uid exactly.
+  peer_uid: 0xB0000001
+  # UDP port used to wake the speaker (must match on both devices).
+  udp_wake_port: 55300
+
+  on_disconnected:
+    # Resume wake-word listening after the session ends
+    - micro_wake_word.start: mww
+  on_stopped:
+    - micro_wake_word.start: mww
+
+button:
+  - platform: restart
+    name: Restart
+    entity_category: config
+    disabled_by_default: true
+
+  # Manual trigger — press to start a session without wake word
+  - platform: template
+    name: Start session
+    on_press:
+      - if:
+          condition:
+            not:
+              voice_assistant_websocket.is_running:
+                id: voice_assistant_ws
+          then:
+            - voice_assistant_websocket.start:
+                id: voice_assistant_ws
+
+debug:
+  update_interval: 60s

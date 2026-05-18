@@ -10,6 +10,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_system.h"
+#include "lwip/sockets.h"
 #endif
 #include <string>
 #include <vector>
@@ -35,6 +36,9 @@ class VoiceAssistantWebSocket : public Component {
   void set_server_url(const std::string &url) { this->server_url_ = url; }
   void set_microphone(microphone::Microphone *mic) { this->microphone_ = mic; }
   void set_speaker(speaker::Speaker *spkr) { this->speaker_ = spkr; }
+  void set_device_uid(uint32_t uid) { this->device_uid_ = uid; }
+  void set_peer_uid(uint32_t uid) { this->peer_uid_ = uid; }
+  void set_udp_wake_port(uint16_t port) { this->udp_wake_port_ = port; }
   
   void start();
   void stop();
@@ -65,10 +69,16 @@ class VoiceAssistantWebSocket : public Component {
   void on_microphone_data_(const std::vector<uint8_t> &data);
   static void websocket_event_handler_(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data);
   void handle_websocket_event_(esp_websocket_event_id_t event_id, esp_websocket_event_data_t *event_data);
+  void send_wake_udp_();
+  static void udp_listen_task_wrapper_(void *arg);
+  void udp_listen_task_();
   
   std::string server_url_;
   microphone::Microphone *microphone_{nullptr};
   speaker::Speaker *speaker_{nullptr};
+  uint32_t device_uid_{0};
+  uint32_t peer_uid_{0};
+  uint16_t udp_wake_port_{55300};
   
 #ifdef USE_ESP_IDF
   esp_websocket_client_handle_t websocket_client_{nullptr};

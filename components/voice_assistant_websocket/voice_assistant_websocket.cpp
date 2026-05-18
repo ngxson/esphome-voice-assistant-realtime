@@ -27,12 +27,20 @@ void VoiceAssistantWebSocket::setup() {
   this->resampled_buffer_.reserve(INPUT_BUFFER_SIZE * 3 / 2);
 
 #ifdef USE_ESP_IDF
-  this->audio_ring_buf_ = (uint8_t *) heap_caps_malloc(AUDIO_RING_CAPACITY, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  if (this->audio_ring_buf_ == nullptr) {
-    ESP_LOGW(TAG, "PSRAM unavailable, falling back to internal heap for ring buffer");
-    this->audio_ring_buf_ = (uint8_t *) heap_caps_malloc(AUDIO_RING_CAPACITY, MALLOC_CAP_DEFAULT);
+  // Only allocate ring buffer on devices that have a speaker (not mic-only)
+  if (this->speaker_ != nullptr) {
+    this->audio_ring_buf_ = (uint8_t *) heap_caps_malloc(AUDIO_RING_CAPACITY, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (this->audio_ring_buf_ == nullptr) {
+      ESP_LOGW(TAG, "PSRAM unavailable, falling back to internal heap for ring buffer");
+      this->audio_ring_buf_ = (uint8_t *) heap_caps_malloc(AUDIO_RING_CAPACITY, MALLOC_CAP_DEFAULT);
+    }
+    ESP_LOGI(TAG, "Audio ring buffer: %zu bytes at %p", AUDIO_RING_CAPACITY, this->audio_ring_buf_);
   }
-  ESP_LOGI(TAG, "Audio ring buffer: %zu bytes at %p", AUDIO_RING_CAPACITY, this->audio_ring_buf_);
+
+  // Speaker-only device: listen for UDP wake packets from the paired mic device
+  if (this->device_uid_ != 0 && this->peer_uid_ == 0 && this->speaker_ != nullptr) {
+    xTaskCreate(udp_listen_task_wrapper_, "udp_wake", 2048, this, 3, nullptr);
+  }
 #endif
 
   this->state_ = VOICE_ASSISTANT_WEBSOCKET_IDLE;
@@ -196,7 +204,12 @@ void VoiceAssistantWebSocket::start() {
   
   // Reset interrupt time
   this->interrupt_time_ = 0;
-  
+
+  // Mic-only device: broadcast UDP wake packet so the paired speaker starts its session
+  if (this->peer_uid_ != 0) {
+    this->send_wake_udp_();
+  }
+
   // Start microphone first (if not already running)
   // Note: micro_wake_word also uses this microphone, so it might already be running
   if (this->microphone_ != nullptr) {
@@ -281,10 +294,24 @@ void VoiceAssistantWebSocket::connect_websocket_() {
     return;
   }
   
-  ESP_LOGI(TAG, "Connecting to WebSocket server: %s", this->server_url_.c_str());
-  
+  // Build effective URL, appending UID params for paired-device setups
+  std::string effective_url = this->server_url_;
+  if (this->device_uid_ != 0) {
+    char params[80];
+    if (this->peer_uid_ != 0) {
+      snprintf(params, sizeof(params), "?uid=%lu&peer_uid=%lu&role=mic",
+               (unsigned long) this->device_uid_, (unsigned long) this->peer_uid_);
+    } else {
+      snprintf(params, sizeof(params), "?uid=%lu&role=speaker",
+               (unsigned long) this->device_uid_);
+    }
+    effective_url += params;
+  }
+
+  ESP_LOGI(TAG, "Connecting to WebSocket server: %s", effective_url.c_str());
+
   esp_websocket_client_config_t websocket_cfg = {};
-  websocket_cfg.uri = this->server_url_.c_str();
+  websocket_cfg.uri = effective_url.c_str();
   websocket_cfg.user_context = this;
   websocket_cfg.buffer_size = 4096;
   websocket_cfg.task_prio = 5;
@@ -674,6 +701,100 @@ void VoiceAssistantWebSocket::handle_websocket_event_(esp_websocket_event_id_t e
     default:
       break;
   }
+}
+
+void VoiceAssistantWebSocket::send_wake_udp_() {
+#ifdef USE_ESP_IDF
+  // Use lwip_* names directly to avoid conflict with esphome::socket namespace
+  int sock = lwip_socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  if (sock < 0) {
+    ESP_LOGW(TAG, "UDP wake: failed to create socket");
+    return;
+  }
+  int broadcast = 1;
+  lwip_setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &broadcast, sizeof(broadcast));
+
+  struct sockaddr_in addr{};
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_BROADCAST);
+  addr.sin_port = htons(this->udp_wake_port_);
+
+  uint8_t pkt[12];
+  pkt[0] = 'V'; pkt[1] = 'A'; pkt[2] = 'W'; pkt[3] = 'K';
+  pkt[4]  = (this->device_uid_ >> 24) & 0xFF;
+  pkt[5]  = (this->device_uid_ >> 16) & 0xFF;
+  pkt[6]  = (this->device_uid_ >>  8) & 0xFF;
+  pkt[7]  =  this->device_uid_        & 0xFF;
+  pkt[8]  = (this->peer_uid_  >> 24) & 0xFF;
+  pkt[9]  = (this->peer_uid_  >> 16) & 0xFF;
+  pkt[10] = (this->peer_uid_  >>  8) & 0xFF;
+  pkt[11] =  this->peer_uid_         & 0xFF;
+
+  int sent = lwip_sendto(sock, pkt, sizeof(pkt), 0, (struct sockaddr *) &addr, sizeof(addr));
+  if (sent < 0) {
+    ESP_LOGW(TAG, "UDP wake: sendto failed");
+  } else {
+    ESP_LOGI(TAG, "UDP wake sent to broadcast:%u (peer_uid=0x%08lX)",
+             this->udp_wake_port_, (unsigned long) this->peer_uid_);
+  }
+  lwip_close(sock);
+#endif
+}
+
+void VoiceAssistantWebSocket::udp_listen_task_wrapper_(void *arg) {
+  static_cast<VoiceAssistantWebSocket *>(arg)->udp_listen_task_();
+}
+
+void VoiceAssistantWebSocket::udp_listen_task_() {
+#ifdef USE_ESP_IDF
+  ESP_LOGI(TAG, "UDP wake listener started on port %u (device_uid=0x%08lX)",
+           this->udp_wake_port_, (unsigned long) this->device_uid_);
+
+  // Use lwip_* names directly to avoid conflict with esphome::socket namespace
+  int sock = lwip_socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  if (sock < 0) {
+    ESP_LOGE(TAG, "UDP wake listener: failed to create socket");
+    vTaskDelete(nullptr);
+    return;
+  }
+
+  struct sockaddr_in addr{};
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_ANY);
+  addr.sin_port = htons(this->udp_wake_port_);
+
+  if (lwip_bind(sock, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
+    ESP_LOGE(TAG, "UDP wake listener: bind failed");
+    lwip_close(sock);
+    vTaskDelete(nullptr);
+    return;
+  }
+
+  // 1-second receive timeout so the task doesn't block forever
+  struct timeval tv{};
+  tv.tv_sec = 1;
+  lwip_setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+  uint8_t buf[12];
+  while (true) {
+    int len = lwip_recv(sock, buf, sizeof(buf), 0);
+    if (len != 12) continue;
+    if (buf[0] != 'V' || buf[1] != 'A' || buf[2] != 'W' || buf[3] != 'K') continue;
+
+    uint32_t target_uid = ((uint32_t) buf[8]  << 24) | ((uint32_t) buf[9]  << 16) |
+                          ((uint32_t) buf[10] <<  8) |  (uint32_t) buf[11];
+    if (target_uid != this->device_uid_) continue;
+
+    if (this->state_ == VOICE_ASSISTANT_WEBSOCKET_IDLE) {
+      uint32_t src_uid = ((uint32_t) buf[4] << 24) | ((uint32_t) buf[5] << 16) |
+                         ((uint32_t) buf[6] <<  8) |  (uint32_t) buf[7];
+      ESP_LOGI(TAG, "UDP wake received from 0x%08lX - starting session", (unsigned long) src_uid);
+      this->pending_start_ = true;
+    } else {
+      ESP_LOGD(TAG, "UDP wake received but session already active, ignoring");
+    }
+  }
+#endif
 }
 
 }  // namespace voice_assistant_websocket
