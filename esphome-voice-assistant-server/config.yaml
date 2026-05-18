@@ -1,6 +1,6 @@
 name: "ESPHome Voice Assistant Realtime Server"
 description: "Bridges ESPHome voice assistant devices to OpenAI Realtime API with optional Home Assistant tool integration."
-version: "1.0.4"
+version: "1.0.5"
 slug: "esphome_voice_assistant_server"
 url: "https://github.com/ngxson/esphome-voice-assistant-realtime"
 init: false
@@ -29,7 +29,7 @@ map:
 options:
   openai_api_key: ""
   websocket_port: 8080
-  model: "gpt-4o-realtime-preview"
+  model: "gpt-4o-realtime-preview-2024-12-17"
   voice: "sage"
   vad_threshold: 0.5
   vad_prefix_padding_ms: 300

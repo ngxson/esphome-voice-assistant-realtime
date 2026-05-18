@@ -73,7 +73,6 @@ export class OpenAIRealtimeClient {
     this.ws = new WebSocket(url, {
       headers: {
         Authorization: `Bearer ${this.config.openai_api_key}`,
-        'OpenAI-Beta': 'realtime=v1',
       },
     });
 
@@ -152,7 +151,9 @@ export class OpenAIRealtimeClient {
         break;
       }
 
-      case 'response.audio_transcript.done': {
+      // GA API renamed this event; handle both names for safety
+      case 'response.audio_transcript.done':
+      case 'response.output_audio_transcript.done': {
         const transcript = event.transcript as string;
         if (transcript) {
           this.conversationItems.push({ type: 'message', role: 'assistant', content: transcript });
