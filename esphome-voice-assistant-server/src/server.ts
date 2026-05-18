@@ -21,23 +21,23 @@ export class VoiceAssistantServer {
   async init(): Promise<void> {
     if (this.config.enable_ha_tools && this.config.ha_mcp_url) {
       this.mcpClient = new MCPClient(this.config.ha_mcp_url, this.config.longlived_token);
-      await this.refreshMCPData();
-      setInterval(() => void this.refreshMCPData(), 5 * 60 * 1000);
+      await this.refreshMCPData(true);
+      setInterval(() => void this.refreshMCPData(false), 5 * 60 * 1000);
     }
   }
 
-  private async refreshMCPData(): Promise<void> {
+  private async refreshMCPData(log: boolean): Promise<void> {
     if (!this.mcpClient) return;
     try {
       const tools = await this.mcpClient.listTools();
       this.mcpTools = tools.map(mcpToolToOpenAI);
-      console.log(`[Server] Refreshed ${this.mcpTools.length} HA tools from MCP`);
+      if (log) console.log(`[Server] Loaded ${this.mcpTools.length} HA tools from MCP`);
     } catch (err: unknown) {
       console.error('[Server] Failed to refresh MCP tools:', err instanceof Error ? err.message : err);
     }
     try {
       this.mcpPrompt = await this.mcpClient.getPrompt('Assist');
-      if (this.mcpPrompt) console.log('[Server] Refreshed HA Assist prompt from MCP');
+      if (log && this.mcpPrompt) console.log('[Server] Loaded HA Assist prompt from MCP');
     } catch (err: unknown) {
       console.error('[Server] Failed to refresh MCP prompt:', err instanceof Error ? err.message : err);
     }

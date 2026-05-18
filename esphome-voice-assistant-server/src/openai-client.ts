@@ -49,6 +49,7 @@ export class OpenAIRealtimeClient {
   private drainTimer: ReturnType<typeof setTimeout> | null = null;
   private drainAudioBytes = 0;
   private isSpeaking = false;
+  private responseAudioBytes = 0;
 
   constructor(
     config: Config,
@@ -162,13 +163,18 @@ export class OpenAIRealtimeClient {
         this.outputRecorder?.write(audio);
         this.onAudio(this.applyGain(audio));
         this.isSpeaking = true;
-        this.resetIdleTimer();
+        this.responseAudioBytes += audio.length;
         if (this.pendingDisconnect) this.drainAudioBytes += audio.length;
         break;
       }
 
       case 'response.output_audio.done': {
         this.isSpeaking = false;
+        // extend idle timer by actual playback duration so ESP32 ring buffer has time to drain
+        // 24kHz mono 16-bit = 48000 bytes/sec
+        const playbackMs = (this.responseAudioBytes / 48000) * 1000;
+        this.responseAudioBytes = 0;
+        this.resetIdleTimer(Math.round(playbackMs) + 500);
         if (this.pendingDisconnect) this.scheduleDrain();
         break;
       }
@@ -313,9 +319,9 @@ export class OpenAIRealtimeClient {
     this.send({ type: 'input_audio_buffer.append', audio: pcm.toString('base64') });
   }
 
-  private resetIdleTimer(): void {
+  private resetIdleTimer(minMs?: number): void {
     if (this.idleTimer) clearTimeout(this.idleTimer);
-    const ms = this.config.idle_timeout_seconds * 1000;
+    const ms = Math.max(this.config.idle_timeout_seconds * 1000, minMs ?? 0);
     this.idleTimer = setTimeout(() => {
       console.log('[OpenAI] Idle timeout — closing session');
       this.onDisconnect();
