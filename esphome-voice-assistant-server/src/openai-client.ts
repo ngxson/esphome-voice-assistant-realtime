@@ -42,6 +42,7 @@ export class OpenAIRealtimeClient {
 
   private inputRecorder: WavRecorder | null = null;
   private outputRecorder: WavRecorder | null = null;
+  private idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     config: Config,
@@ -290,8 +291,18 @@ export class OpenAIRealtimeClient {
 
   sendAudio(pcm: Buffer): void {
     if (!this.sessionReady || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.resetIdleTimer();
     this.inputRecorder?.write(pcm);
     this.send({ type: 'input_audio_buffer.append', audio: pcm.toString('base64') });
+  }
+
+  private resetIdleTimer(): void {
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    const ms = this.config.idle_timeout_seconds * 1000;
+    this.idleTimer = setTimeout(() => {
+      console.log('[OpenAI] Idle timeout — closing session');
+      this.onDisconnect();
+    }, ms);
   }
 
   interrupt(): void {
@@ -304,6 +315,7 @@ export class OpenAIRealtimeClient {
   }
 
   close(): void {
+    if (this.idleTimer) clearTimeout(this.idleTimer);
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.close();
     this.ws = null;
   }

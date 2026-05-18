@@ -14,6 +14,7 @@ export interface Config {
   ha_mcp_url: string;
   longlived_token: string;
   enable_recording: boolean;
+  idle_timeout_seconds: number;
 }
 
 const DEFAULTS: Config = {
@@ -30,6 +31,7 @@ const DEFAULTS: Config = {
   ha_mcp_url: '',
   longlived_token: '',
   enable_recording: false,
+  idle_timeout_seconds: 3,
 };
 
 export function loadConfig(): Config {
@@ -56,5 +58,6 @@ export function loadConfig(): Config {
     ha_mcp_url: process.env.HA_MCP_URL ?? DEFAULTS.ha_mcp_url,
     longlived_token: process.env.HA_TOKEN ?? DEFAULTS.longlived_token,
     enable_recording: (process.env.ENABLE_RECORDING ?? 'false') === 'true',
+    idle_timeout_seconds: parseInt(process.env.IDLE_TIMEOUT_SECONDS ?? String(DEFAULTS.idle_timeout_seconds), 10),
   };
 }
