@@ -107,6 +107,7 @@ export class OpenAIRealtimeClient {
     this.send({
       type: 'session.update',
       session: {
+        type: 'realtime',
         modalities: ['text', 'audio'],
         instructions: this.config.instructions,
         voice: this.config.voice,
