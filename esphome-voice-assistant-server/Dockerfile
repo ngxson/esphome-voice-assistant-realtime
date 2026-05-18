@@ -21,7 +21,4 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY run.sh /run.sh
 RUN chmod +x /run.sh
 
-# tini is included in the HA base images; use it as PID 1 (init: false in config.yaml
-# disables s6-overlay so we own the entrypoint)
-ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["/run.sh"]
