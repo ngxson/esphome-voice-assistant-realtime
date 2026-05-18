@@ -52,7 +52,7 @@ export class VoiceAssistantServer {
     });
   }
 
-  private handleClient(ws: WebSocket, clientId: string): void {
+  private async handleClient(ws: WebSocket, clientId: string): Promise<void> {
     const cachedItems = this.sessionManager.getCachedItems(clientId);
     if (cachedItems.length > 0) {
       console.log(`[Server] Restoring ${cachedItems.length} context items for ${clientId}`);
@@ -64,6 +64,16 @@ export class VoiceAssistantServer {
 
     let openaiClient: OpenAIRealtimeClient | null = null;
     let cleaned = false;
+
+    let liveContext: string | null = null;
+    if (this.mcpClient) {
+      try {
+        liveContext = await this.mcpClient.getLiveContext();
+        console.log(`[Server] Fetched live context for ${clientId}`);
+      } catch (err: unknown) {
+        console.error('[Server] Failed to fetch live context:', err instanceof Error ? err.message : err);
+      }
+    }
 
     const cleanup = (): void => {
       if (cleaned) return;
@@ -86,6 +96,7 @@ export class VoiceAssistantServer {
       this.mcpTools,
       cachedItems,
       recordingPath,
+      liveContext,
       (audio) => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(audio);

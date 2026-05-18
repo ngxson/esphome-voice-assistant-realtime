@@ -76,6 +76,10 @@ export class MCPClient {
     return result.tools ?? [];
   }
 
+  async getLiveContext(): Promise<string> {
+    return this.callTool('GetLiveContext', {});
+  }
+
   async callTool(name: string, args: Record<string, unknown>): Promise<string> {
     const result = await this.request('tools/call', { name, arguments: args }) as {
       content?: Array<{ type: string; text?: string }>;

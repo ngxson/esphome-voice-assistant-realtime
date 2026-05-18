@@ -34,6 +34,7 @@ export class OpenAIRealtimeClient {
   private onToolCall: ToolCallHandler;
 
   private conversationItems: ConversationItem[];
+  private liveContext: string | null;
   private sessionReady = false;
   // call_id → function name, populated from response.output_item.added
   private pendingCallNames = new Map<string, string>();
@@ -46,6 +47,7 @@ export class OpenAIRealtimeClient {
     tools: OpenAITool[],
     cachedItems: ConversationItem[],
     recordingPath: string | null,
+    liveContext: string | null,
     onAudio: AudioOutputCallback,
     onDisconnect: DisconnectCallback,
     onToolCall: ToolCallHandler,
@@ -53,6 +55,7 @@ export class OpenAIRealtimeClient {
     this.config = config;
     this.tools = tools;
     this.conversationItems = [...cachedItems];
+    this.liveContext = liveContext;
     this.onAudio = onAudio;
     this.onDisconnect = onDisconnect;
     this.onToolCall = onToolCall;
@@ -237,6 +240,18 @@ export class OpenAIRealtimeClient {
   }
 
   private restoreContext(): void {
+    if (this.liveContext) {
+      this.send({
+        type: 'conversation.item.create',
+        item: {
+          type: 'message',
+          role: 'system',
+          content: [{ type: 'input_text', text: `Current home state:\n${this.liveContext}` }],
+        },
+      });
+      console.log('[OpenAI] Injected live home context');
+    }
+
     if (this.conversationItems.length === 0) return;
 
     for (const item of this.conversationItems) {
