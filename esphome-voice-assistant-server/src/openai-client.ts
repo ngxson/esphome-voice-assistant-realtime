@@ -45,6 +45,7 @@ export class OpenAIRealtimeClient {
   private inputRecorder: WavRecorder | null = null;
   private outputRecorder: WavRecorder | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  private playbackTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingDisconnect = false;
   private drainTimer: ReturnType<typeof setTimeout> | null = null;
   private drainAudioBytes = 0;
@@ -142,8 +143,13 @@ export class OpenAIRealtimeClient {
     });
   }
 
+  private debug(msg: string): void {
+    if (process.env.DEBUG === 'true') console.log(`[DEBUG] ${msg}`);
+  }
+
   private handleEvent(event: Record<string, unknown>, onReady: () => void): void {
     const type = event.type as string;
+    this.debug(`event: ${type}`);
 
     switch (type) {
       case 'session.created':
@@ -151,6 +157,7 @@ export class OpenAIRealtimeClient {
         if (!this.sessionReady) {
           this.sessionReady = true;
           this.restoreContext();
+          this.debug('session ready → resetIdleTimer');
           this.resetIdleTimer();
           onReady();
         }
@@ -158,7 +165,9 @@ export class OpenAIRealtimeClient {
       }
 
       case 'input_audio_buffer.speech_started': {
-        this.resetIdleTimer();
+        this.debug(`speech_started → clear idleTimer=${!!this.idleTimer} playbackTimer=${!!this.playbackTimer}`);
+        if (this.idleTimer) { clearTimeout(this.idleTimer); this.idleTimer = null; }
+        if (this.playbackTimer) { clearTimeout(this.playbackTimer); this.playbackTimer = null; }
         break;
       }
 
@@ -168,9 +177,8 @@ export class OpenAIRealtimeClient {
         this.onAudio(this.applyGain(audio));
         this.isSpeaking = true;
         this.responseAudioBytes += audio.length;
-        // Pause idle timer while assistant is speaking — don't restart it here,
-        // as the last-chunk timer would fire before playback ends on the device.
         if (this.idleTimer) {
+          this.debug('audio.delta → clear idleTimer');
           clearTimeout(this.idleTimer);
           this.idleTimer = null;
         }
@@ -182,16 +190,20 @@ export class OpenAIRealtimeClient {
         // 24kHz mono 16-bit = 48000 bytes/sec
         const playbackMs = (this.responseAudioBytes / 48000) * 1000;
         this.responseAudioBytes = 0;
+        this.debug(`audio.done → playbackMs=${Math.round(playbackMs)}`);
         if (this.pendingDisconnect) this.scheduleDrain();
         if (playbackMs > 0) {
-          // Restart idle timer only after device finishes playing audio
-          setTimeout(() => {
+          if (this.playbackTimer) clearTimeout(this.playbackTimer);
+          this.playbackTimer = setTimeout(() => {
+            this.playbackTimer = null;
             this.isSpeaking = false;
+            this.debug('playbackTimer fired → resetIdleTimer');
             this.resetIdleTimer();
           }, Math.round(playbackMs) + 200);
+          this.debug(`audio.done → playbackTimer set for ${Math.round(playbackMs) + 200}ms`);
         } else {
           this.isSpeaking = false;
-          // Zero-byte response (e.g. during init) — don't start idle timer
+          this.debug('audio.done → playbackMs=0, skip idle timer');
         }
         break;
       }
@@ -348,6 +360,7 @@ export class OpenAIRealtimeClient {
 
   private resetIdleTimer(): void {
     if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.debug(`resetIdleTimer → ${this.config.idle_timeout_seconds}s`);
     this.idleTimer = setTimeout(() => {
       console.log('[OpenAI] Idle timeout — closing session');
       this.onDisconnect();
@@ -389,6 +402,7 @@ export class OpenAIRealtimeClient {
 
   close(): void {
     if (this.idleTimer) clearTimeout(this.idleTimer);
+    if (this.playbackTimer) clearTimeout(this.playbackTimer);
     if (this.drainTimer) clearTimeout(this.drainTimer);
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.close();
     this.ws = null;

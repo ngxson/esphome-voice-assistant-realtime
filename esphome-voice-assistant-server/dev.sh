@@ -31,5 +31,6 @@ docker run --rm \
   -e HA_MCP_URL="${HA_MCP_URL:-}" \
   -e HA_TOKEN="${HA_TOKEN:-}" \
   -e ENABLE_RECORDING="${ENABLE_RECORDING:-false}" \
+  -e DEBUG="true" \
   "$IMAGE" \
   node /app/dist/index.js
