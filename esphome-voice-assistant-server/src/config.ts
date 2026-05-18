@@ -19,7 +19,7 @@ export interface Config {
 const DEFAULTS: Config = {
   openai_api_key: '',
   websocket_port: 8080,
-  model: 'gpt-4o-realtime-preview-2024-12-17',
+  model: 'gpt-realtime-mini',
   voice: 'sage',
   vad_threshold: 0.5,
   vad_prefix_padding_ms: 300,

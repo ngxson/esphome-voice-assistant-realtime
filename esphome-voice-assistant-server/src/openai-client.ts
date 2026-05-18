@@ -108,17 +108,21 @@ export class OpenAIRealtimeClient {
       type: 'session.update',
       session: {
         type: 'realtime',
-        modalities: ['text', 'audio'],
+        output_modalities: ['audio'],
         instructions: this.config.instructions,
-        voice: this.config.voice,
-        input_audio_format: 'pcm16',
-        output_audio_format: 'pcm16',
-        input_audio_transcription: { model: 'whisper-1' },
-        turn_detection: {
-          type: 'server_vad',
-          threshold: this.config.vad_threshold,
-          prefix_padding_ms: this.config.vad_prefix_padding_ms,
-          silence_duration_ms: this.config.vad_silence_duration_ms,
+        audio: {
+          input: {
+            transcription: { model: 'whisper-1' },
+            turn_detection: {
+              type: 'server_vad',
+              threshold: this.config.vad_threshold,
+              prefix_padding_ms: this.config.vad_prefix_padding_ms,
+              silence_duration_ms: this.config.vad_silence_duration_ms,
+            },
+          },
+          output: {
+            voice: this.config.voice,
+          },
         },
         tools: [DISCONNECT_TOOL, ...this.tools],
         tool_choice: 'auto',
@@ -140,29 +144,29 @@ export class OpenAIRealtimeClient {
         break;
       }
 
-      case 'response.audio.delta': {
+      case 'response.output_audio.delta': {
         const audio = Buffer.from(event.delta as string, 'base64');
         this.outputRecorder?.write(audio);
         this.onAudio(audio);
         break;
       }
 
-      // GA API renamed this; handle both names
-      case 'response.audio_transcript.done':
       case 'response.output_audio_transcript.done': {
         const transcript = event.transcript as string | undefined;
         if (transcript) {
+          console.log(`[OpenAI] Assistant: ${transcript}`);
           this.conversationItems.push({ type: 'message', role: 'assistant', content: transcript });
         }
         break;
       }
 
-      case 'conversation.item.created': {
+      case 'conversation.item.added': {
         const item = event.item as Record<string, unknown> | undefined;
         if (item?.role === 'user' && Array.isArray(item.content)) {
           for (const part of item.content as Array<Record<string, unknown>>) {
             const text = (part.text ?? part.transcript) as string | undefined;
             if (text) {
+              console.log(`[OpenAI] User: ${text}`);
               this.conversationItems.push({ type: 'message', role: 'user', content: text });
               break;
             }
