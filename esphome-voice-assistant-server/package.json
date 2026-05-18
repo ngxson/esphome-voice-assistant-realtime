@@ -10,6 +10,7 @@
     "dev": "ts-node --esm src/index.ts"
   },
   "dependencies": {
+    "openai": "^4.100.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
