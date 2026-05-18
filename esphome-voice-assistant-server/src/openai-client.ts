@@ -8,6 +8,8 @@ export type AudioOutputCallback = (audio: Buffer) => void;
 export type DisconnectCallback = () => void;
 export type ToolCallHandler = (name: string, args: Record<string, unknown>) => Promise<string>;
 
+const ENABLE_DUPLEX = false; // whether to allow assistant to listen while speaking (may cause assistant to re-listen to its own voice and get confused)
+
 const DISCONNECT_TOOL: OpenAITool = {
   type: 'function',
   name: 'disconnect_client',
@@ -45,6 +47,7 @@ export class OpenAIRealtimeClient {
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingDisconnect = false;
   private drainTimer: ReturnType<typeof setTimeout> | null = null;
+  private isSpeaking = false;
 
   constructor(
     config: Config,
@@ -157,7 +160,13 @@ export class OpenAIRealtimeClient {
         const audio = Buffer.from(event.delta as string, 'base64');
         this.outputRecorder?.write(audio);
         this.onAudio(this.applyGain(audio));
+        this.isSpeaking = true;
         if (this.pendingDisconnect) this.scheduleDrain();
+        break;
+      }
+
+      case 'response.output_audio.done': {
+        this.isSpeaking = false;
         break;
       }
 
@@ -296,6 +305,7 @@ export class OpenAIRealtimeClient {
   sendAudio(pcm: Buffer): void {
     if (!this.sessionReady || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this.resetIdleTimer();
+    if (!ENABLE_DUPLEX && this.isSpeaking) return;
     this.inputRecorder?.write(pcm);
     this.send({ type: 'input_audio_buffer.append', audio: pcm.toString('base64') });
   }
@@ -329,6 +339,7 @@ export class OpenAIRealtimeClient {
   }
 
   interrupt(): void {
+    this.isSpeaking = false;
     this.send({ type: 'response.cancel' });
     this.send({ type: 'input_audio_buffer.clear' });
   }
