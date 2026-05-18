@@ -130,7 +130,6 @@ export class OpenAIRealtimeClient {
             turn_detection: {
               type: 'semantic_vad',
               eagerness: 'low',
-              prefix_padding_ms: this.config.vad_prefix_padding_ms,
             },
           },
           output: {
