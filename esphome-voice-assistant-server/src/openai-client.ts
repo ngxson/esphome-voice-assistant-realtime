@@ -128,10 +128,9 @@ export class OpenAIRealtimeClient {
           input: {
             transcription: { model: 'whisper-1' },
             turn_detection: {
-              type: 'server_vad',
-              threshold: this.config.vad_threshold,
+              type: 'semantic_vad',
+              eagerness: 'low',
               prefix_padding_ms: this.config.vad_prefix_padding_ms,
-              silence_duration_ms: this.config.vad_silence_duration_ms,
             },
           },
           output: {
@@ -158,12 +157,18 @@ export class OpenAIRealtimeClient {
         break;
       }
 
+      case 'input_audio_buffer.speech_started': {
+        this.resetIdleTimer();
+        break;
+      }
+
       case 'response.output_audio.delta': {
         const audio = Buffer.from(event.delta as string, 'base64');
         this.outputRecorder?.write(audio);
         this.onAudio(this.applyGain(audio));
         this.isSpeaking = true;
         this.responseAudioBytes += audio.length;
+        this.resetIdleTimer();
         if (this.pendingDisconnect) this.drainAudioBytes += audio.length;
         break;
       }
@@ -172,11 +177,12 @@ export class OpenAIRealtimeClient {
         // 24kHz mono 16-bit = 48000 bytes/sec
         const playbackMs = (this.responseAudioBytes / 48000) * 1000;
         this.responseAudioBytes = 0;
-        this.resetIdleTimer(Math.round(playbackMs) + this.config.idle_timeout_seconds * 1000);
         if (this.pendingDisconnect) this.scheduleDrain();
-        // Keep mic muted until ESP32 ring buffer drains + 200ms room tail,
-        // otherwise the mic picks up the tail of the speaker output (echo)
-        setTimeout(() => { this.isSpeaking = false; }, playbackMs + 200);
+        // Unmute mic and start idle timer only after ESP32 ring buffer fully drains
+        setTimeout(() => {
+          this.isSpeaking = false;
+          this.resetIdleTimer();
+        }, Math.round(playbackMs) + 200);
         break;
       }
 
@@ -189,11 +195,21 @@ export class OpenAIRealtimeClient {
         break;
       }
 
+      case 'conversation.item.input_audio_transcription.completed': {
+        const transcript = event.transcript as string | undefined;
+        if (transcript) {
+          console.log(`[OpenAI] User: ${transcript}`);
+          this.conversationItems.push({ type: 'message', role: 'user', content: transcript });
+        }
+        break;
+      }
+
       case 'conversation.item.added': {
+        // audio items arrive before transcription is ready; handled by input_audio_transcription.completed
         const item = event.item as Record<string, unknown> | undefined;
         if (item?.role === 'user' && Array.isArray(item.content)) {
           for (const part of item.content as Array<Record<string, unknown>>) {
-            const text = (part.text ?? part.transcript) as string | undefined;
+            const text = part.text as string | undefined;
             if (text) {
               console.log(`[OpenAI] User: ${text}`);
               this.conversationItems.push({ type: 'message', role: 'user', content: text });
@@ -315,19 +331,17 @@ export class OpenAIRealtimeClient {
 
   sendAudio(pcm: Buffer): void {
     if (!this.sessionReady || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    this.resetIdleTimer();
     if (!ENABLE_DUPLEX && this.isSpeaking) return;
     this.inputRecorder?.write(pcm);
     this.send({ type: 'input_audio_buffer.append', audio: pcm.toString('base64') });
   }
 
-  private resetIdleTimer(minMs?: number): void {
+  private resetIdleTimer(): void {
     if (this.idleTimer) clearTimeout(this.idleTimer);
-    const ms = Math.max(this.config.idle_timeout_seconds * 1000, minMs ?? 0);
     this.idleTimer = setTimeout(() => {
       console.log('[OpenAI] Idle timeout — closing session');
       this.onDisconnect();
-    }, ms);
+    }, this.config.idle_timeout_seconds * 1000);
   }
 
   private scheduleDrain(): void {
