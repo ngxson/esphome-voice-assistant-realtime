@@ -46,6 +46,38 @@ void VoiceAssistantWebSocket::setup() {
 }
 
 void VoiceAssistantWebSocket::loop() {
+  // Detect silent disconnect: WebSocket dropped without firing WEBSOCKET_EVENT_DISCONNECTED
+  if (this->state_ == VOICE_ASSISTANT_WEBSOCKET_RUNNING &&
+      this->websocket_client_ != nullptr &&
+      !this->pending_disconnect_ &&
+      !this->pending_server_disconnect_ &&
+      !esp_websocket_client_is_connected(this->websocket_client_)) {
+    ESP_LOGW(TAG, "Silent WebSocket disconnect detected");
+    this->pending_server_disconnect_ = true;
+  }
+
+  // Server-side session end — clean up in main loop (safe to fire triggers here)
+  if (this->pending_server_disconnect_) {
+    this->pending_server_disconnect_ = false;
+    this->pending_disconnect_ = false;  // Prevent double-trigger if stop() was also called
+    if (this->websocket_client_ != nullptr) {
+      esp_websocket_client_stop(this->websocket_client_);
+      esp_websocket_client_destroy(this->websocket_client_);
+      this->websocket_client_ = nullptr;
+    }
+    if (this->speaker_ != nullptr) this->speaker_->stop();
+    this->ring_head_ = 0;
+    this->ring_tail_ = 0;
+    this->input_buffer_.clear();
+    this->output_buffer_.clear();
+    this->state_ = VOICE_ASSISTANT_WEBSOCKET_IDLE;
+    if (this->state_callback_) this->state_callback_(this->state_);
+    this->disconnected_trigger_.trigger();
+    this->stopped_trigger_.trigger();
+    ESP_LOGI(TAG, "Server session ended, cleaned up");
+    return;
+  }
+
   // Handle pending disconnect (must be done in main task, not websocket task)
   if (this->pending_disconnect_) {
     this->pending_disconnect_ = false;
@@ -443,12 +475,15 @@ void VoiceAssistantWebSocket::on_microphone_data_(const std::vector<uint8_t> &da
 }
 
 bool VoiceAssistantWebSocket::is_bot_speaking() const {
-  // Bot is considered speaking if we received audio within the last 500ms
-  if (this->last_speaker_audio_time_ == 0) {
-    return false;  // No audio received yet
+  // Still has buffered audio to drain — playback is ongoing regardless of when bytes arrived
+  if (this->audio_ring_buf_ != nullptr) {
+    size_t head = __atomic_load_n(&this->ring_head_, __ATOMIC_ACQUIRE);
+    if (head != this->ring_tail_) return true;
   }
-  uint32_t time_since_last_audio = millis() - this->last_speaker_audio_time_;
-  return time_since_last_audio < 500;  // 500ms threshold
+  // Ring buffer is empty; stay "speaking" for 500ms after the last byte was written
+  // (covers the resampler/mixer pipeline latency)
+  if (this->last_speaker_audio_time_ == 0) return false;
+  return (millis() - this->last_speaker_audio_time_) < 500;
 }
 
 void VoiceAssistantWebSocket::interrupt() {
@@ -513,27 +548,15 @@ void VoiceAssistantWebSocket::handle_websocket_event_(esp_websocket_event_id_t e
       
     case WEBSOCKET_EVENT_DISCONNECTED:
       ESP_LOGW(TAG, "WebSocket disconnected");
-      this->state_ = VOICE_ASSISTANT_WEBSOCKET_DISCONNECTED;
-      
-      if (this->state_callback_) {
-        this->state_callback_(this->state_);
+      if (this->state_ == VOICE_ASSISTANT_WEBSOCKET_RUNNING) {
+        // Server closed the session — defer all cleanup to loop() (safe from WebSocket task)
+        this->pending_server_disconnect_ = true;
+      } else {
+        this->state_ = VOICE_ASSISTANT_WEBSOCKET_DISCONNECTED;
+        if (this->state_callback_) this->state_callback_(this->state_);
+        this->disconnected_trigger_.trigger();
       }
-      
-      // Trigger disconnected automation
-      this->disconnected_trigger_.trigger();
-      
-      // Only attempt reconnection if we didn't receive an explicit disconnect message
-      // If explicit_disconnect_ is true, we should stay in idle mode
-      if (!this->explicit_disconnect_ && 
-          (this->state_ == VOICE_ASSISTANT_WEBSOCKET_RUNNING || 
-           this->state_ == VOICE_ASSISTANT_WEBSOCKET_DISCONNECTED)) {
-        this->reconnect_pending_ = true;
-        this->last_reconnect_attempt_ = millis();
-      } else if (this->explicit_disconnect_) {
-        ESP_LOGI(TAG, "Explicit disconnect received, staying in idle mode (no reconnection)");
-        // Reset flag for next time
-        this->explicit_disconnect_ = false;
-      }
+      this->explicit_disconnect_ = false;
       break;
       
     case WEBSOCKET_EVENT_DATA:

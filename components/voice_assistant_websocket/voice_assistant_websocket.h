@@ -112,6 +112,7 @@ class VoiceAssistantWebSocket : public Component {
   
   bool pending_start_{false};
   bool pending_disconnect_{false};  // Flag to disconnect in loop() (cannot be called from websocket task)
+  bool pending_server_disconnect_{false};  // Server closed session — clean up in loop()
   bool reconnect_pending_{false};
   bool explicit_disconnect_{false};  // Flag to prevent reconnection after explicit disconnect
   uint32_t reconnect_attempts_{0};
